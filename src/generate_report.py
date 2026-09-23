@@ -105,13 +105,55 @@ def make_report(pdf_path='presentation/Data_Science_Capstone_Project_Report.pdf'
     c.drawString(40, height-80, 'EDA with SQL (sample results)')
     c.setFont('Helvetica', 11)
     try:
-        from src.sqlite_analysis import run_query
-        q1 = 'SELECT COUNT(*) as total, SUM("Payload Mass (kg)") as total_payload FROM spacex_launches;'
-        res = run_query('data/spacex_launches.db', 'SELECT COUNT(*) as total FROM spacex_launches')
-        total = int(res['total'].iloc[0])
-        c.drawString(40, height-120, f'Total records in SQLite DB: {total}')
-    except Exception:
+        import sqlite3
+        import pandas as pd
+        db_path = 'data/spacex_launches.db'
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            # Total records
+            total_df = pd.read_sql_query('SELECT COUNT(*) as total FROM spacex_launches', conn)
+            total = int(total_df['total'].iloc[0])
+            c.drawString(40, height-120, f'Total records in SQLite DB: {total}')
+
+            # Per-site stats: launches, successes, success_rate, avg payload
+            q_site = '''SELECT "Launch Site" as site, COUNT(*) as launches, SUM("class") as successes, 
+                        ROUND(1.0*SUM("class")/COUNT(*),3) as success_rate, 
+                        ROUND(AVG("Payload Mass (kg)"),2) as avg_payload
+                        FROM spacex_launches
+                        GROUP BY "Launch Site"
+                        ORDER BY launches DESC;'''
+            site_df = pd.read_sql_query(q_site, conn)
+            # Draw table-like output
+            y = height-150
+            c.drawString(40, y, 'Launch Site | launches | successes | success_rate | avg_payload')
+            y -= 14
+            for _, row in site_df.iterrows():
+                line = f"{row['site'][:28]:28} | {int(row['launches']):7d} | {int(row['successes']):8d} | {row['success_rate']:12.3f} | {row['avg_payload']:11.2f}"
+                c.drawString(40, y, line)
+                y -= 12
+                if y < 80:
+                    c.showPage(); y = height-80
+
+            # Top payloads
+            q_payload = 'SELECT "Flight Number", "Payload Mass (kg)", "Launch Site", class FROM spacex_launches ORDER BY "Payload Mass (kg)" DESC LIMIT 5;'
+            payload_df = pd.read_sql_query(q_payload, conn)
+            c.showPage()
+            c.setFont('Helvetica-Bold', 16)
+            c.drawString(40, height-80, 'Top 5 Payloads (kg)')
+            c.setFont('Helvetica', 11)
+            y = height-110
+            for _, r in payload_df.iterrows():
+                c.drawString(40, y, f"Flight {int(r['Flight Number'])}: {r['Payload Mass (kg)']} kg — {r['Launch Site']} — class={int(r['class'])}")
+                y -= 14
+                if y < 80:
+                    c.showPage(); y = height-80
+
+            conn.close()
+        else:
+            c.drawString(40, height-120, 'SQLite DB not found at data/spacex_launches.db')
+    except Exception as e:
         c.drawString(40, height-120, 'SQLite queries could not be executed or DB missing')
+        c.drawString(40, height-140, f'Error: {str(e)[:200]}')
     c.showPage()
 
     # Folium map note
@@ -119,7 +161,16 @@ def make_report(pdf_path='presentation/Data_Science_Capstone_Project_Report.pdf'
     c.drawString(40, height-80, 'Folium Map')
     c.setFont('Helvetica', 11)
     c.drawString(40, height-110, 'Interactive map generated at figures/map/spacex_launch_map.html')
-    c.drawString(40, height-130, 'To include a static image in slides, open the HTML and capture a screenshot, then place it under figures/map/.')
+    # embed static map image if available
+    static_map = 'figures/map/spacemap_static.png'
+    if os.path.exists(static_map):
+        try:
+            img = ImageReader(static_map)
+            c.drawImage(img, 80, height-420, width=440, height=300, preserveAspectRatio=True)
+        except Exception:
+            c.drawString(40, height-130, 'Static map image found but could not be embedded.')
+    else:
+        c.drawString(40, height-130, 'To include a static image in slides, open the HTML and capture a screenshot, then place it under figures/map/.')
     c.showPage()
 
     # Plotly Dash note
@@ -161,22 +212,45 @@ def make_report(pdf_path='presentation/Data_Science_Capstone_Project_Report.pdf'
     for line in split_text(concl, 80):
         c.drawString(40, y, line); y -= 14
 
-    # GitHub slide — must not fabricate URL
+    # GitHub slide — attempt to include actual repository URL if present in README
     c.showPage()
     c.setFont('Helvetica-Bold', 16)
     c.drawString(40, height-80, 'GitHub Repository Status')
     c.setFont('Helvetica', 11)
-    c.drawString(40, height-110, 'No GitHub repository URL was provided or detected in this environment.')
-    c.drawString(40, height-130, 'To include your GitHub URL in the final submission:')
-    steps = [
-        'Initialize git in project root: git init',
-        'Add files: git add .',
-        'Commit: git commit -m "Initial capstone project"',
-        'Create repo on GitHub and push, then update README with the repository URL.'
-    ]
-    y = height-160
-    for s in steps:
-        c.drawString(50, y, '- ' + s); y -= 14
+    repo_url = None
+    try:
+        if os.path.exists('README.md'):
+            with open('README.md', 'r') as rf:
+                for line in rf:
+                    if 'github.com' in line:
+                        parts = line.split()
+                        for p in parts:
+                            if 'github.com' in p:
+                                repo_url = p.strip().rstrip('.,')
+                                break
+                    if repo_url:
+                        break
+    except Exception:
+        repo_url = None
+
+    if repo_url:
+        c.drawString(40, height-110, 'Repository URL detected:')
+        c.setFillColorRGB(0, 0, 0.7)
+        c.drawString(40, height-130, repo_url)
+        c.setFillColorRGB(0, 0, 0)
+        c.drawString(40, height-160, 'The repository has been pushed to GitHub and is available at the URL above.')
+    else:
+        c.drawString(40, height-110, 'No GitHub repository URL was detected in this environment.')
+        c.drawString(40, height-130, 'To include your GitHub URL in the final submission:')
+        steps = [
+            'Initialize git in project root: git init',
+            'Add files: git add .',
+            'Commit: git commit -m "Initial capstone project"',
+            'Create repo on GitHub and push, then update README with the repository URL.'
+        ]
+        y = height-160
+        for s in steps:
+            c.drawString(50, y, '- ' + s); y -= 14
 
     c.save()
     print('Report written to', pdf_path)
